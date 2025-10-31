@@ -249,6 +249,12 @@ document.addEventListener('DOMContentLoaded', () => {
 		return map;
 	}
 
+	// Helper: get Oct 1 of a given year
+	function getOct1OfYear(year) {
+		// month index 9 = October
+		return new Date(year, 9, 1);
+	}
+
 	// Handle form submit — compute start + 8 days (9-day window) and render exactly 9 cards
 	form.addEventListener('submit', async (e) => {
 		e.preventDefault();
@@ -259,17 +265,36 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 
 		const start = new Date(startDateValue);
-		const end = addDays(start, 8); // 9 consecutive days: start + 8
+
+		// Enforce cutoff: October 1 of the start year
+		const cutoff = getOct1OfYear(start.getFullYear());
+		if (start > cutoff) {
+			alert('No APOD data is available after October 1 for the selected year. Please choose an earlier start date.');
+			return;
+		}
+
+		// Compute the 9-day window but limit the fetch end to the cutoff (fetchEnd used for API requests).
+		const desiredEnd = addDays(start, 8); // start + 8 days = 9 days total
+		let fetchEnd = desiredEnd;
+		let wasTrimmed = false;
+		if (fetchEnd > cutoff) {
+			fetchEnd = cutoff;
+			wasTrimmed = true;
+		}
+
 		const startStr = formatDate(start);
-		const endStr = formatDate(end);
+		const fetchEndStr = formatDate(fetchEnd);
+		const renderEnd = desiredEnd; // keep rendering 9 cards; days after cutoff will be placeholders
 
 		loading.hidden = false;
-		loading.textContent = 'Loading gallery, please wait...';
+		loading.textContent = wasTrimmed
+			? `Loading gallery for ${startStr} → ${fetchEndStr} (limited to Oct 1). Placeholder cards will fill later dates.`
+			: 'Loading gallery, please wait...';
 		gallery.innerHTML = '';
 
 		try {
-			// fetchApodRange already tries bulk then per-day fallback; pass the 9-day window
-			const result = await fetchApodRange(API_KEY, startStr, endStr);
+			// fetchApodRange already tries bulk then per-day fallback; pass the (possibly trimmed) fetch range
+			const result = await fetchApodRange(API_KEY, startStr, fetchEndStr);
 			const items = result.items || [];
 			const dateMap = buildDateMap(items);
 
@@ -278,7 +303,7 @@ document.addEventListener('DOMContentLoaded', () => {
 				loading.textContent = 'Using fallback dataset (NASA API unavailable). Showing available entries.';
 			}
 
-			// Render exactly 9 cards for start + 0..8
+			// Render exactly 9 cards for start + 0..8 (dates after cutoff will show placeholders)
 			for (let i = 0; i < 9; i++) {
 				const day = addDays(start, i);
 				const dayKey = formatDate(day);
@@ -308,7 +333,6 @@ document.addEventListener('DOMContentLoaded', () => {
 						img.src = item.url;
 						img.alt = item.title || 'APOD image';
 					} else if (item.media_type === 'video') {
-						// Use helper to pick a thumbnail for the video (prefer embed_url/thumbnail_url)
 						const thumbSource = getVideoThumbnail(item.embed_url || item.url || '', item);
 						img.src = thumbSource;
 						img.alt = item.title || 'APOD video';
@@ -325,7 +349,7 @@ document.addEventListener('DOMContentLoaded', () => {
 					card.addEventListener('click', () => openModal(item));
 					card.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') openModal(item); });
 				} else {
-					// Placeholder for missing day
+					// Placeholder for missing day (either no data returned or date after fetchEnd/cutoff)
 					title.textContent = 'No APOD available';
 					img.src = 'img/nasa-worm-logo.png';
 					img.alt = 'No APOD';
