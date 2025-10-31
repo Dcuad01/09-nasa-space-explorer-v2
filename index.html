@@ -29,9 +29,8 @@
 			<form id="date-form">
 				<label for="start-date">Start date:</label>
 				<input id="start-date" name="start-date" type="date" required />
-				<label for="end-date">End date:</label>
-				<input id="end-date" name="end-date" type="date" required />
-				<button id="load-btn" type="submit">Load Gallery</button>
+				<!-- end-date removed — script will fetch start + 8 days (9 total) -->
+				<button id="load-btn" type="submit">Load 9-Day Gallery</button>
 			</form>
 
 			<div id="did-you-know" class="did-you-know" aria-live="polite">

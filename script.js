@@ -16,10 +16,9 @@ document.addEventListener('DOMContentLoaded', () => {
 	const randomFact = facts[Math.floor(Math.random() * facts.length)];
 	didEl.textContent = randomFact;
 
-	// Form and UI elements
+	// Form and UI elements — use only a start date (we fetch 9 consecutive days)
 	const form = document.getElementById('date-form');
 	const startInput = document.getElementById('start-date');
-	const endInput = document.getElementById('end-date');
 	const gallery = document.getElementById('gallery');
 	const loading = document.getElementById('loading');
 
@@ -246,23 +245,17 @@ document.addEventListener('DOMContentLoaded', () => {
 		return map;
 	}
 
-	// Handle form submit
+	// Handle form submit — compute start + 8 days (9-day window) and render exactly 9 cards
 	form.addEventListener('submit', async (e) => {
 		e.preventDefault();
 		const startDateValue = startInput.value;
-		const endDateValue = endInput.value;
-		if (!startDateValue || !endDateValue) {
-			alert('Please choose both start and end dates.');
+		if (!startDateValue) {
+			alert('Please choose a start date.');
 			return;
 		}
 
 		const start = new Date(startDateValue);
-		const end = new Date(endDateValue);
-		if (start > end) {
-			alert('Start date must be the same as or before the end date.');
-			return;
-		}
-
+		const end = addDays(start, 8); // 9 consecutive days: start + 8
 		const startStr = formatDate(start);
 		const endStr = formatDate(end);
 
@@ -271,62 +264,46 @@ document.addEventListener('DOMContentLoaded', () => {
 		gallery.innerHTML = '';
 
 		try {
+			// fetchApodRange already tries bulk then per-day fallback; pass the 9-day window
 			const result = await fetchApodRange(API_KEY, startStr, endStr);
-			let items = result.items || [];
+			const items = result.items || [];
+			const dateMap = buildDateMap(items);
 
-			// If fallback, filter the fallback dataset to the requested date range
+			// If using fallback dataset, show short notice
 			if (result.source === 'fallback') {
-				const dateMapAll = buildDateMap(items);
-				// Build an array for each date in the requested range if present
-				items = [];
-				for (let d = new Date(start); d <= end; d = addDays(d, 1)) {
-					const key = formatDate(d);
-					if (dateMapAll.has(key)) items.push(dateMapAll.get(key));
-				}
 				loading.textContent = 'Using fallback dataset (NASA API unavailable). Showing available entries.';
 			}
 
-			// Sort items chronologically
-			items.sort((a, b) => new Date(a.date) - new Date(b.date));
+			// Render exactly 9 cards for start + 0..8
+			for (let i = 0; i < 9; i++) {
+				const day = addDays(start, i);
+				const dayKey = formatDate(day);
+				const item = dateMap.get(dayKey);
 
-			// Build gallery from items array (one card per returned item)
-			if (items.length === 0) {
-				// If nothing available, show a single placeholder card
 				const card = document.createElement('article');
 				card.className = 'card';
-				card.innerHTML = `
-					<div style="padding:18px">
-						<h3 class="card-title">No APOD available for the selected range</h3>
-						<div class="card-date">${startStr} → ${endStr}</div>
-					</div>
-				`;
-				gallery.appendChild(card);
-			} else {
-				items.forEach((item) => {
-					const card = document.createElement('article');
-					card.className = 'card';
-					card.tabIndex = 0;
+				card.tabIndex = 0;
 
-					const mediaWrap = document.createElement('div');
-					mediaWrap.style.position = 'relative';
+				const mediaWrap = document.createElement('div');
+				mediaWrap.style.position = 'relative';
 
-					const img = document.createElement('img');
-					img.className = 'card-media';
+				const img = document.createElement('img');
+				img.className = 'card-media';
 
-					const body = document.createElement('div');
-					body.className = 'card-body';
-					const title = document.createElement('h3');
-					title.className = 'card-title';
+				const body = document.createElement('div');
+				body.className = 'card-body';
+				const title = document.createElement('h3');
+				title.className = 'card-title';
+				const date = document.createElement('div');
+				date.className = 'card-date';
+				date.textContent = dayKey;
+
+				if (item) {
 					title.textContent = item.title || 'No title';
-					const date = document.createElement('div');
-					date.className = 'card-date';
-					date.textContent = item.date || '';
-
 					if (item.media_type === 'image') {
 						img.src = item.url;
 						img.alt = item.title || 'APOD image';
 					} else if (item.media_type === 'video') {
-						// Use helper to pick a thumbnail for the video
 						const thumb = getVideoThumbnail(item.url || '', item);
 						img.src = thumb;
 						img.alt = item.title || 'APOD video';
@@ -339,17 +316,29 @@ document.addEventListener('DOMContentLoaded', () => {
 						img.alt = 'APOD media';
 					}
 
-					mediaWrap.appendChild(img);
-					body.appendChild(title);
-					body.appendChild(date);
-					card.appendChild(mediaWrap);
-					card.appendChild(body);
-
 					card.addEventListener('click', () => openModal(item));
 					card.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') openModal(item); });
+				} else {
+					// Placeholder for missing day
+					title.textContent = 'No APOD available';
+					img.src = 'img/nasa-worm-logo.png';
+					img.alt = 'No APOD';
+					card.addEventListener('click', () => {
+						modalTitle.textContent = 'No APOD available';
+						modalDate.textContent = dayKey;
+						modalExplanation.textContent = 'No Astronomy Picture of the Day is available for this date in the dataset.';
+						modalMedia.innerHTML = `<img src="img/nasa-worm-logo.png" alt="No APOD">`;
+						modal.setAttribute('aria-hidden', 'false');
+					});
+					card.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') card.click(); });
+				}
 
-					gallery.appendChild(card);
-				});
+				mediaWrap.appendChild(img);
+				body.appendChild(title);
+				body.appendChild(date);
+				card.appendChild(mediaWrap);
+				card.appendChild(body);
+				gallery.appendChild(card);
 			}
 
 			// Hide loading after gallery is built
@@ -357,7 +346,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		} catch (err) {
 			console.error(err);
 			loading.textContent = `Error loading data: ${err.message}`;
-			// Keep loading visible so user sees the error
+			// Keep message visible
 		}
 	});
 });
