@@ -51,40 +51,43 @@ document.addEventListener('DOMContentLoaded', () => {
 		return copy;
 	}
 
-	// Helper: detect YouTube ID
+	// Helper: detect YouTube ID from many URL forms
 	function parseYouTubeId(url) {
-		const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/);
+		if (!url) return null;
+		const m = url.match(/(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|v\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/);
 		return m ? m[1] : null;
 	}
 
-	// Helper: detect Vimeo ID
+	// Helper: detect Vimeo ID (more tolerant)
 	function parseVimeoId(url) {
-		const m = url.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+		if (!url) return null;
+		const m = url.match(/vimeo\.com\/(?:video\/)?([0-9]+)/) || url.match(/player\.vimeo\.com\/video\/([0-9]+)/);
 		return m ? m[1] : null;
 	}
 
 	// Helper: is direct video file
 	function isDirectVideo(url) {
-		return /\.(mp4|webm|ogg)(?:\?|$)/i.test(url);
+		return !!url && /\.(mp4|webm|ogg)(?:\?|$)/i.test(url);
 	}
 
 	// Helper: get best thumbnail for a video item / url
 	function getVideoThumbnail(url, item) {
-		// Prefer thumbnail_url from API if present
+		// Prefer explicit thumbnail from API when available
 		if (item && item.thumbnail_url) return item.thumbnail_url;
-		// YouTube: derive thumbnail
-		const yt = parseYouTubeId(url);
+		// Prefer embed_url if it's a YouTube URL
+		const candidate = (item && (item.embed_url || item.url)) || url || '';
+		const yt = parseYouTubeId(candidate);
 		if (yt) return `https://img.youtube.com/vi/${yt}/hqdefault.jpg`;
-		// Vimeo: no free CDN thumbnail without extra request; fallback to item.url or worm logo
-		if (parseVimeoId(url)) return item && item.url ? item.url : 'img/nasa-worm-logo.png';
-		// Direct video: no thumbnail in many cases — fallback to worm logo
-		if (isDirectVideo(url)) return 'img/nasa-worm-logo.png';
-		// Default fallback
+		// Vimeo thumbnails require an API call; fall back to item.url or worm logo
+		if (parseVimeoId(candidate)) return (item && item.url) ? item.url : 'img/nasa-worm-logo.png';
+		// Direct video: no thumbnail -> fallback
+		if (isDirectVideo(candidate)) return 'img/nasa-worm-logo.png';
 		return 'img/nasa-worm-logo.png';
 	}
 
-	// Helper: create embed element for modal given a video url
-	function createVideoEmbed(url) {
+	// Helper: create embed element for modal given the APOD item
+	function createVideoEmbed(item) {
+		const url = (item && (item.embed_url || item.url)) || '';
 		// YouTube embed
 		const yt = parseYouTubeId(url);
 		if (yt) {
@@ -111,6 +114,7 @@ document.addEventListener('DOMContentLoaded', () => {
 			video.controls = true;
 			video.src = url;
 			video.style.maxWidth = '100%';
+			video.setAttribute('playsinline', '');
 			return video;
 		}
 		// Last resort: link element
@@ -135,8 +139,8 @@ document.addEventListener('DOMContentLoaded', () => {
 			img.alt = item.title || 'APOD image';
 			modalMedia.appendChild(img);
 		} else if (item.media_type === 'video') {
-			// Use helper to create best embed element
-			const mediaEl = createVideoEmbed(item.url || '');
+			// Use helper to create best embed element using the full item
+			const mediaEl = createVideoEmbed(item);
 			modalMedia.appendChild(mediaEl);
 		} else {
 			// Unknown media type
@@ -304,12 +308,14 @@ document.addEventListener('DOMContentLoaded', () => {
 						img.src = item.url;
 						img.alt = item.title || 'APOD image';
 					} else if (item.media_type === 'video') {
-						const thumb = getVideoThumbnail(item.url || '', item);
-						img.src = thumb;
+						// Use helper to pick a thumbnail for the video (prefer embed_url/thumbnail_url)
+						const thumbSource = getVideoThumbnail(item.embed_url || item.url || '', item);
+						img.src = thumbSource;
 						img.alt = item.title || 'APOD video';
 						const overlay = document.createElement('div');
 						overlay.className = 'play-overlay';
 						overlay.textContent = '▶ VIDEO';
+						overlay.style.zIndex = '2';
 						mediaWrap.appendChild(overlay);
 					} else {
 						img.src = 'img/nasa-worm-logo.png';
