@@ -6,6 +6,8 @@ In this project, you’ll build a gallery that fetches APOD-style entries from a
 
 ---
 
+Note: This app reads only from the classroom CDN JSON feed (no NASA API calls). On submit, it requests a 9‑day range starting from the selected date, filters and sorts the results on the client, and renders image cards or video thumbnails/embeds. To test: pick a start date, verify the Network panel shows exactly one request to the CDN URL (with a cache‑busting v= timestamp), confirm up to 9 items render in ascending order, images open in the modal, videos either show a clickable thumbnail (linking to the video in a new tab) or a playable embed, and that the modal opens/closes with click, Enter, and Escape.
+
 ## Data Source (CDN)
 
 Use this URL in your `fetch` request:

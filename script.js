@@ -22,6 +22,28 @@ document.addEventListener('DOMContentLoaded', () => {
 	const gallery = document.getElementById('gallery');
 	const loading = document.getElementById('loading');
 
+	// Initialize start date defaults so the app is responsive on first load
+	// - max: Oct 1 of the current year
+	// - default value: Oct 1 minus 8 days (so we have a full 9-day window)
+	const now = new Date();
+	const currentYear = now.getFullYear();
+	const oct1 = new Date(currentYear, 9, 1); // month 9 = October
+	const defaultStart = new Date(oct1);
+	defaultStart.setDate(oct1.getDate() - 8);
+	// Apply to the input
+	if (startInput) {
+		startInput.max = `${oct1.getFullYear()}-${String(oct1.getMonth() + 1).padStart(2, '0')}-${String(oct1.getDate()).padStart(2, '0')}`;
+		if (!startInput.value) {
+			startInput.value = `${defaultStart.getFullYear()}-${String(defaultStart.getMonth() + 1).padStart(2, '0')}-${String(defaultStart.getDate()).padStart(2, '0')}`;
+		}
+	}
+
+	// Optionally auto-load once so users see content right away
+	if (form && startInput && startInput.value) {
+		// Use requestSubmit for broad browser support
+		setTimeout(() => form.requestSubmit(), 0);
+	}
+
 	// Modal elements
 	const modal = document.getElementById('modal');
 	const modalBackdrop = document.getElementById('modal-backdrop');
@@ -31,10 +53,8 @@ document.addEventListener('DOMContentLoaded', () => {
 	const modalMedia = document.getElementById('modal-media');
 	const modalExplanation = document.getElementById('modal-explanation');
 
-	// Use provided API key from global window (set in js/script.js)
-	const API_KEY = window.NASA_API_KEY || 'DEMO_KEY';
-	// Fallback CDN URL (may be set by /js/script.js as window.APOD_FALLBACK_URL)
-	const FALLBACK_URL = window.APOD_FALLBACK_URL || 'https://cdn.jsdelivr.net/gh/GCA-Classroom/apod/data.json';
+	// Data source: Classroom CDN feed (array of APOD-like entries)
+	const DATA_URL = 'https://cdn.jsdelivr.net/gh/GCA-Classroom/apod/data.json';
 
 	// Helper: format a Date to YYYY-MM-DD
 	function formatDate(d) {
@@ -70,18 +90,9 @@ document.addEventListener('DOMContentLoaded', () => {
 		return !!url && /\.(mp4|webm|ogg)(?:\?|$)/i.test(url);
 	}
 
-	// Helper: get best thumbnail for a video item / url
+	// Helper: (simplified) choose a thumbnail for video; prefer provided thumbnail_url
 	function getVideoThumbnail(url, item) {
-		// Prefer explicit thumbnail from API when available
 		if (item && item.thumbnail_url) return item.thumbnail_url;
-		// Prefer embed_url if it's a YouTube URL
-		const candidate = (item && (item.embed_url || item.url)) || url || '';
-		const yt = parseYouTubeId(candidate);
-		if (yt) return `https://img.youtube.com/vi/${yt}/hqdefault.jpg`;
-		// Vimeo thumbnails require an API call; fall back to item.url or worm logo
-		if (parseVimeoId(candidate)) return (item && item.url) ? item.url : 'img/nasa-worm-logo.png';
-		// Direct video: no thumbnail -> fallback
-		if (isDirectVideo(candidate)) return 'img/nasa-worm-logo.png';
 		return 'img/nasa-worm-logo.png';
 	}
 
@@ -163,81 +174,23 @@ document.addEventListener('DOMContentLoaded', () => {
 		if (e.key === 'Escape') closeModal();
 	});
 
-	// Helper: fetch a single APOD item for a specific date (returns item or null)
-	async function fetchApodForDate(baseUrl, dateStr) {
-		// Use date query parameter for single-day request
-		const url = `${baseUrl}&date=${dateStr}`;
-		try {
-			const res = await fetch(url);
-			if (!res.ok) {
-				// non-ok for single date — skip this date
-				return null;
-			}
-			const data = await res.json();
-			// If API returns an error object structure, treat as null
-			if (!data || data.error) return null;
-			return data;
-		} catch (err) {
-			// network error — treat as missing
-			return null;
-		}
-	}
-
-	// Helper: fetch APOD data from NASA or fallback on 403 / network errors
-	async function fetchApodRange(apiKey, startStr, endStr) {
-		// Determine base URL: prefer the exact full URL provided on window, else build from key
-		const baseUrl = window.NASA_API_FULL_URL || `https://api.nasa.gov/planetary/apod?api_key=${encodeURIComponent(apiKey)}`;
-
-		// Try bulk request first (start_date & end_date)
-		const bulkUrl = `${baseUrl}&start_date=${startStr}&end_date=${endStr}`;
-		try {
-			const res = await fetch(bulkUrl);
-			if (res.ok) {
-				const data = await res.json();
-				// If API returned items, and array has length, return it
-				const items = Array.isArray(data) ? data : [data];
-				// filter out invalid entries
-				const valid = items.filter((it) => it && it.date);
-				if (valid.length > 0) {
-					return { source: 'nasa', items: valid };
-				}
-				// If bulk returned no valid items (often because range includes future dates), fall through to per-day
-				console.warn('Bulk request returned no valid items — will try per-day requests');
-			} else {
-				// Non-ok bulk response (403/4xx/5xx)
-				console.warn(`NASA API bulk returned ${res.status} — will try per-day requests`);
-			}
-		} catch (err) {
-			console.warn('Bulk NASA API request failed — will try per-day requests', err);
-		}
-
-		// Bulk didn't yield usable data — attempt per-day requests for the requested range,
-		// skipping future dates to avoid predictable "no data yet" responses.
+	// Fetch from CDN, verify array, filter inclusive by [start..end], sort ascending
+	async function fetchFromCDN(startStr, endStr) {
+		const url = `${DATA_URL}?v=${Date.now()}`; // cache-bust
+		const res = await fetch(url);
+		if (!res.ok) throw new Error(`CDN fetch failed: ${res.status} ${res.statusText} (${url})`);
+		const data = await res.json();
+		if (!Array.isArray(data)) throw new Error('CDN response is not an array');
+		// Inclusive range filter
 		const start = new Date(startStr);
 		const end = new Date(endStr);
-		const today = new Date();
-		const items = [];
-		for (let d = new Date(start); d <= end; d = addDays(d, 1)) {
-			// skip dates in the future
-			if (d > today) continue;
-			const dayKey = formatDate(d);
-			/* eslint-disable no-await-in-loop */
-			const item = await fetchApodForDate(baseUrl, dayKey);
-			/* eslint-enable no-await-in-loop */
-			if (item && item.date) items.push(item);
-		}
-
-		if (items.length > 0) {
-			// Return whatever NASA had for the individual dates
-			return { source: 'nasa', items };
-		}
-
-		// If we get here, no NASA data found — fall back to CDN dataset
-		console.warn('No NASA data found for range; falling back to CDN dataset');
-		const fbRes = await fetch(FALLBACK_URL);
-		if (!fbRes.ok) throw new Error(`Fallback fetch failed: ${fbRes.status}`);
-		const fbData = await fbRes.json();
-		return { source: 'fallback', items: Array.isArray(fbData) ? fbData : [fbData] };
+		const filtered = data.filter((it) => {
+			if (!it || !it.date) return false;
+			const d = new Date(it.date);
+			return d >= start && d <= end;
+		});
+		filtered.sort((a, b) => new Date(a.date) - new Date(b.date));
+		return filtered;
 	}
 
 	// Build a map by date for fast lookup
@@ -249,11 +202,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		return map;
 	}
 
-	// Helper: get Oct 1 of a given year
-	function getOct1OfYear(year) {
-		// month index 9 = October
-		return new Date(year, 9, 1);
-	}
+	// (Removed Oct 1 cutoff logic) — we use a simple 9-day inclusive window
 
 	// Handle form submit — compute start + 8 days (9-day window) and render exactly 9 cards
 	form.addEventListener('submit', async (e) => {
@@ -265,50 +214,22 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 
 		const start = new Date(startDateValue);
-
-		// Enforce cutoff: October 1 of the start year
-		const cutoff = getOct1OfYear(start.getFullYear());
-		if (start > cutoff) {
-			alert('No APOD data is available after October 1 for the selected year. Please choose an earlier start date.');
-			return;
-		}
-
-		// Compute the 9-day window but limit the fetch end to the cutoff (fetchEnd used for API requests).
-		const desiredEnd = addDays(start, 8); // start + 8 days = 9 days total
-		let fetchEnd = desiredEnd;
-		let wasTrimmed = false;
-		if (fetchEnd > cutoff) {
-			fetchEnd = cutoff;
-			wasTrimmed = true;
-		}
+		// Compute the 9-day window (inclusive): start + 8 days = 9 total
+		const fetchEnd = addDays(start, 8);
 
 		const startStr = formatDate(start);
 		const fetchEndStr = formatDate(fetchEnd);
-		const renderEnd = desiredEnd; // keep rendering 9 cards; days after cutoff will be placeholders
 
 		loading.hidden = false;
-		loading.textContent = wasTrimmed
-			? `Loading gallery for ${startStr} → ${fetchEndStr} (limited to Oct 1). Placeholder cards will fill later dates.`
-			: 'Loading gallery, please wait...';
+		loading.textContent = `Loading gallery for ${startStr} → ${fetchEndStr}...`;
 		gallery.innerHTML = '';
 
 		try {
-			// fetchApodRange already tries bulk then per-day fallback; pass the (possibly trimmed) fetch range
-			const result = await fetchApodRange(API_KEY, startStr, fetchEndStr);
-			const items = result.items || [];
-			const dateMap = buildDateMap(items);
+			// Load and filter data for the 9-day window
+			const itemsInRange = await fetchFromCDN(startStr, fetchEndStr);
 
-			// If using fallback dataset, show short notice
-			if (result.source === 'fallback') {
-				loading.textContent = 'Using fallback dataset (NASA API unavailable). Showing available entries.';
-			}
-
-			// Render exactly 9 cards for start + 0..8 (dates after cutoff will show placeholders)
-			for (let i = 0; i < 9; i++) {
-				const day = addDays(start, i);
-				const dayKey = formatDate(day);
-				const item = dateMap.get(dayKey);
-
+			// Render 0..9 items sorted ascending by date
+			itemsInRange.forEach((item) => {
 				const card = document.createElement('article');
 				card.className = 'card';
 				card.tabIndex = 0;
@@ -316,67 +237,75 @@ document.addEventListener('DOMContentLoaded', () => {
 				const mediaWrap = document.createElement('div');
 				mediaWrap.style.position = 'relative';
 
-				const img = document.createElement('img');
-				img.className = 'card-media';
-
 				const body = document.createElement('div');
 				body.className = 'card-body';
 				const title = document.createElement('h3');
 				title.className = 'card-title';
+				title.textContent = item.title || 'Untitled';
 				const date = document.createElement('div');
 				date.className = 'card-date';
-				date.textContent = dayKey;
+				date.textContent = item.date || '';
 
-				if (item) {
-					title.textContent = item.title || 'No title';
-					if (item.media_type === 'image') {
-						img.src = item.url;
-						img.alt = item.title || 'APOD image';
-					} else if (item.media_type === 'video') {
-						const thumbSource = getVideoThumbnail(item.embed_url || item.url || '', item);
-						img.src = thumbSource;
+				if (item.media_type === 'image') {
+					const img = document.createElement('img');
+					img.className = 'card-media';
+					img.src = item.url || item.hdurl;
+					img.alt = item.title || 'APOD image';
+					mediaWrap.appendChild(img);
+				} else if (item.media_type === 'video') {
+					if (item.thumbnail_url) {
+						const a = document.createElement('a');
+						a.href = item.url;
+						a.target = '_blank';
+						a.rel = 'noopener';
+						a.addEventListener('click', (ev) => ev.stopPropagation());
+						const img = document.createElement('img');
+						img.className = 'card-media';
+						img.src = item.thumbnail_url;
 						img.alt = item.title || 'APOD video';
+						a.appendChild(img);
+						mediaWrap.appendChild(a);
 						const overlay = document.createElement('div');
 						overlay.className = 'play-overlay';
 						overlay.textContent = '▶ VIDEO';
 						overlay.style.zIndex = '2';
 						mediaWrap.appendChild(overlay);
 					} else {
-						img.src = 'img/nasa-worm-logo.png';
-						img.alt = 'APOD media';
+						const iframe = document.createElement('iframe');
+						iframe.src = item.url;
+						iframe.title = item.title || 'APOD video';
+						iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture';
+						iframe.allowFullscreen = true;
+						iframe.style.width = '100%';
+						iframe.style.aspectRatio = '16 / 9';
+						iframe.style.border = '0';
+						iframe.className = 'card-media';
+						mediaWrap.appendChild(iframe);
 					}
-
-					card.addEventListener('click', () => openModal(item));
-					card.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') openModal(item); });
 				} else {
-					// Placeholder for missing day (either no data returned or date after fetchEnd/cutoff)
-					title.textContent = 'No APOD available';
+					const img = document.createElement('img');
+					img.className = 'card-media';
 					img.src = 'img/nasa-worm-logo.png';
-					img.alt = 'No APOD';
-					card.addEventListener('click', () => {
-						modalTitle.textContent = 'No APOD available';
-						modalDate.textContent = dayKey;
-						modalExplanation.textContent = 'No Astronomy Picture of the Day is available for this date in the dataset.';
-						modalMedia.innerHTML = `<img src="img/nasa-worm-logo.png" alt="No APOD">`;
-						modal.setAttribute('aria-hidden', 'false');
-					});
-					card.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') card.click(); });
+					img.alt = 'APOD media';
+					mediaWrap.appendChild(img);
 				}
 
-				mediaWrap.appendChild(img);
+				card.addEventListener('click', () => openModal(item));
+				card.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') openModal(item); });
+
 				body.appendChild(title);
 				body.appendChild(date);
 				card.appendChild(mediaWrap);
 				card.appendChild(body);
 				gallery.appendChild(card);
-			}
+			});
 
 			// Hide loading after gallery is built
 			loading.hidden = true;
 		} catch (err) {
 			console.error(err);
-			loading.textContent = `Error loading data: ${err.message}`;
-			// Keep message visible
+			loading.hidden = true;
+			gallery.innerHTML = `<div class="loading" role="alert" style="border-left-color:#c00;color:#b91c1c"><strong>Error:</strong> ${err.message}</div>`;
 		}
 	});
 });
